@@ -122,6 +122,7 @@ class SchedulerApp:
             )
             try:
                 start_time, end_time = self._parse_date_range(date_range)
+                print(f"Searching from {start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')}")
                 break
             except ValueError:
                 print("Invalid date format. Please try again.")
@@ -192,6 +193,9 @@ class SchedulerApp:
         # Display available slots
         if not available_slots:
             print("No available slots found based on your criteria.")
+            retry = input("Would you like to try with different criteria? (yes/no): ").lower()
+            if retry.startswith('y'):
+                return self.handle_event_creation()
             return
         
         print("\nTop available slots:")
@@ -347,17 +351,21 @@ class SchedulerApp:
     def _parse_date_range(self, date_range):
         """Parse date range string into datetime objects"""
         if date_range.lower() == 'within a week':
-            start_time = datetime.datetime.utcnow()
+            start_time = datetime.datetime.now(datetime.timezone.utc)
             end_time = start_time + datetime.timedelta(days=7)
             return start_time, end_time
         
         try:
             dates = date_range.split(' to ')
             if len(dates) == 2:
+                # Parse dates as local time, then convert to UTC
                 start_date = datetime.datetime.strptime(dates[0], '%Y-%m-%d')
+                start_date = start_date.replace(tzinfo=datetime.timezone.utc)
+                
                 end_date = datetime.datetime.strptime(dates[1], '%Y-%m-%d')
                 # Set end date to end of day
-                end_date = end_date.replace(hour=23, minute=59, second=59)
+                end_date = end_date.replace(hour=23, minute=59, second=59, tzinfo=datetime.timezone.utc)
+                
                 return start_date, end_date
         except ValueError:
             pass

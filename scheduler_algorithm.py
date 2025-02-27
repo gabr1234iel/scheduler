@@ -150,10 +150,33 @@ class SchedulerAlgorithm:
         Returns:
             List of (start, end) tuples for free slots
         """
+        # Make sure all datetimes have consistent timezone awareness
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=datetime.timezone.utc)
+        if end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=datetime.timezone.utc)
+            
         duration = datetime.timedelta(minutes=duration_minutes)
         free_slots = []
         
+        # If no busy ranges, the entire period is available
+        if not busy_ranges:
+            # For an empty calendar, create slots at every hour
+            current = start_time
+            while current + duration <= end_time:
+                free_slots.append((current, current + duration))
+                # Move to the next hour
+                next_hour = current + datetime.timedelta(hours=1)
+                current = datetime.datetime(
+                    next_hour.year, next_hour.month, next_hour.day, 
+                    next_hour.hour, 0, 0, tzinfo=next_hour.tzinfo
+                )
+            return free_slots
+        
         # Sort busy ranges
+        busy_ranges = [(b[0] if b[0].tzinfo else b[0].replace(tzinfo=datetime.timezone.utc),
+                       b[1] if b[1].tzinfo else b[1].replace(tzinfo=datetime.timezone.utc)) 
+                       for b in busy_ranges]
         busy_ranges.sort(key=lambda x: x[0])
         
         # Merge overlapping busy ranges
@@ -196,31 +219,39 @@ class SchedulerAlgorithm:
         Returns:
             Filtered list of slots
         """
-        if time_preference == 'no preference':
+        # If no preference or no slots, return as is
+        if time_preference == 'no preference' or not slots:
             return slots
+        
+        # Print slot count before filtering
+        print(f"Filtering {len(slots)} slots by time preference: {time_preference}")
         
         filtered_slots = []
         
         for start, end in slots:
-            # Define time ranges (UTC)
-            morning_start = datetime.time(5, 0)
-            morning_end = datetime.time(12, 0)
+            # Convert to local time for time-of-day filtering if timezone-aware
+            if start.tzinfo:
+                local_start = start.astimezone()
+                hour = local_start.hour
+            else:
+                hour = start.hour
+                
+            # Define time ranges (using local time)
+            morning_range = range(5, 12)      # 5:00 AM - 11:59 AM
+            afternoon_range = range(12, 17)   # 12:00 PM - 4:59 PM
+            evening_range = range(17, 23)     # 5:00 PM - 10:59 PM
             
-            afternoon_start = datetime.time(12, 0)
-            afternoon_end = datetime.time(17, 0)
-            
-            evening_start = datetime.time(17, 0)
-            evening_end = datetime.time(23, 0)
-            
-            start_time = start.time()
-            
-            if time_preference == 'morning' and morning_start <= start_time < morning_end:
-                filtered_slots.append((start, end))
-            elif time_preference == 'afternoon' and afternoon_start <= start_time < afternoon_end:
-                filtered_slots.append((start, end))
-            elif time_preference == 'evening' and evening_start <= start_time < evening_end:
+            if (time_preference == 'morning' and hour in morning_range) or \
+               (time_preference == 'afternoon' and hour in afternoon_range) or \
+               (time_preference == 'evening' and hour in evening_range):
                 filtered_slots.append((start, end))
         
+        # If we filtered out everything but had slots, return at least one
+        if not filtered_slots and slots:
+            print(f"No slots match the time preference '{time_preference}'. Returning the first slot anyway.")
+            return [slots[0]]
+            
+        print(f"Found {len(filtered_slots)} slots matching the time preference")
         return filtered_slots
     
     def _filter_slots_for_individual(
