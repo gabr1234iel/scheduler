@@ -1,6 +1,7 @@
 // app/api/chat/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
+import { getCalendarServiceFromSession } from "@/lib/calendar-service";
 
 export async function POST(request: NextRequest) {
   const session = await getServerSession();
@@ -23,7 +24,6 @@ export async function POST(request: NextRequest) {
       console.log("Sending to backend:", {
         message,
         user_email: session.user.email,
-        // Pass the auth token if available
         access_token: session.accessToken || "mock-token",
       });
       
@@ -35,9 +35,7 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           message,
           user_email: session.user.email,
-          // Ensure access_token is always provided (use a mock value if not available)
           access_token: session.accessToken || "mock-token", 
-          // Add refresh_token field as it's in the backend schema
           refresh_token: null
         }),
       });
@@ -45,11 +43,10 @@ export async function POST(request: NextRequest) {
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         console.error("Backend error:", errorData);
-        // Return a more user-friendly error instead of throwing
         return NextResponse.json(
           { 
             type: "text", 
-            content: "Sorry, I encountered a problem connecting to the scheduler service. Please try again later." 
+            content: "Sorry, I encountered a problem connecting to the scheduler service. Please try again." 
           }
         );
       }
@@ -57,9 +54,9 @@ export async function POST(request: NextRequest) {
       const data = await response.json();
       return NextResponse.json(data);
     } else {
-      // Use mock response for development
+      // Use enhanced mock response for development
       console.log("Using mock response (enable real backend by setting USE_REAL_BACKEND=true)");
-      const mockResponse = await mockChatResponse(message, session.user.email);
+      const mockResponse = await enhancedMockChatResponse(message, session.user.email, session);
       return NextResponse.json(mockResponse);
     }
   } catch (error) {
@@ -74,14 +71,106 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Mock function to simulate bot responses
-async function mockChatResponse(message: string, userEmail: string) {
+// Enhanced mock function with calendar integration
+async function enhancedMockChatResponse(message: string, userEmail: string, session: any) {
   const lowerMessage = message.toLowerCase();
   
   // Wait to simulate API latency
   await new Promise(resolve => setTimeout(resolve, 1000));
   
-  if (lowerMessage.includes("schedule") || lowerMessage.includes("meeting") || lowerMessage.includes("event")) {
+  // Check if user wants to view events
+  if (lowerMessage.includes("view") || lowerMessage.includes("show") || 
+      lowerMessage.includes("see") || lowerMessage.includes("list") || 
+      lowerMessage.includes("upcoming") || lowerMessage.includes("events")) {
+    
+    // Try to get real calendar events if possible
+    try {
+      const calendarService = getCalendarServiceFromSession(session);
+      if (calendarService) {
+        const events = await calendarService.getUpcomingEvents(5);
+        if (events && events.length > 0) {
+          return {
+            type: "text",
+            content: `Here are your upcoming events:\n\n${events.map((e: any, i: number) => 
+              `${i+1}. ${e.summary} - ${formatEventTime(e.start?.dateTime)}`).join('\n')}`
+          };
+        }
+      }
+    } catch (error) {
+      console.log("Error getting calendar events:", error);
+      // Fall back to mock response
+    }
+    
+    // Mock response for events
+    return {
+      type: "text",
+      content: "Here are your upcoming events:",
+      followUp: {
+        type: "text",
+        content: "1. Team Meeting - Tomorrow, 10:00 AM\n2. Project Review - Wednesday, 2:00 PM\n3. Client Call - Friday, 11:30 AM"
+      }
+    };
+  }
+  
+  // Check if this is a scheduling request
+  if (lowerMessage.includes("schedule") || lowerMessage.includes("meeting") || 
+      lowerMessage.includes("event") || lowerMessage.includes("appointment")) {
+    
+    // If specific day is mentioned
+    if (lowerMessage.includes("tomorrow") || lowerMessage.includes("monday") || 
+        lowerMessage.includes("tuesday") || lowerMessage.includes("wednesday") || 
+        lowerMessage.includes("thursday") || lowerMessage.includes("friday")) {
+      
+      // Generate mock time slots
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(9, 0, 0, 0);
+      
+      const slots = [];
+      for (let i = 0; i < 3; i++) {
+        const start = new Date(tomorrow);
+        start.setHours(start.getHours() + (i * 2));
+        
+        const end = new Date(start);
+        end.setHours(end.getHours() + 1);
+        
+        slots.push({
+          id: `slot-${i}`,
+          start: start.toISOString(),
+          end: end.toISOString()
+        });
+      }
+      
+      return {
+        type: "slots",
+        content: "I found these available time slots. Which one works for you?",
+        slots,
+        followUp: {
+          type: "options",
+          content: "Or would you prefer different times?",
+          options: ["Show more options", "Different day", "Cancel"]
+        }
+      };
+    }
+    
+    // For collaborative meetings
+    if (lowerMessage.includes("with") || lowerMessage.includes("team") || lowerMessage.includes("group")) {
+      return {
+        type: "text",
+        content: "I'll help you schedule a collaborative event. I'll need some information to find the best time for everyone.",
+        followUp: {
+          type: "options",
+          content: "Who would you like to include in this meeting?",
+          options: [
+            "My team",
+            "Specific people",
+            "Just me and one other person"
+          ]
+        }
+      };
+    }
+    
+    // Default scheduling response
     return {
       type: "text",
       content: "I'll help you schedule an event. Let me ask a few questions to find the best time.",
@@ -92,8 +181,6 @@ async function mockChatResponse(message: string, userEmail: string) {
       }
     };
   }
-  
-  // Rest of the mock implementation remains the same...
   
   // Default response
   return {
@@ -110,4 +197,19 @@ async function mockChatResponse(message: string, userEmail: string) {
       ]
     }
   };
+}
+
+// Helper function to format event times
+function formatEventTime(dateTimeString?: string): string {
+  if (!dateTimeString) return "Time not specified";
+  
+  const date = new Date(dateTimeString);
+  return date.toLocaleString('en-US', { 
+    weekday: 'short',
+    month: 'short', 
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
 }
